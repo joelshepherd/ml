@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "@shumai/shumai": "github:facebookresearch/shumai"
+  },
+  "devDependencies": {
+    "bun-types": "^0.2.2"
+  }
+}
