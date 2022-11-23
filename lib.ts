@@ -1,6 +1,6 @@
 import * as SM from "@shumai/shumai";
 
-type Layer = (input: SM.Tensor, train: boolean) => SM.Tensor;
+type Layer = (input: SM.Tensor, train?: boolean) => SM.Tensor;
 type Loss = (y: SM.Tensor, p: SM.Tensor) => SM.Tensor;
 type Optimiser = (
   gradients: Record<string, { grad: SM.Tensor; tensor: SM.Tensor }>
@@ -15,11 +15,15 @@ export const sequential =
 
 /// linear layer (no activation fn)
 export const linear = (inputSize: number, outputSize: number): Layer => {
-  // following torch's `U(-sqrt(k), sqrt(k))`
-  const k = Math.sqrt(1 / inputSize) * 2;
-  const W = uniform([inputSize, outputSize], k).requireGrad();
-  const B = uniform([outputSize], k).requireGrad();
-  return (input) => input.matmul(W).add(B);
+  // TODO: following torch's `U(-sqrt(k), sqrt(k))`
+  //       currently not converging when i use this
+  // const k = Math.sqrt(1 / inputSize) * 2;
+  // const W = uniform([inputSize, outputSize], k).requireGrad();
+  // const B = uniform([outputSize], k).requireGrad();
+  const W = SM.randn([inputSize, outputSize]).requireGrad();
+  // TODO: biases seems to the numbe  of inputs when doing gradient descent
+  // const B = SM.randn([outputSize]).requireGrad();
+  return (input) => input.matmul(W); // .add(B);
 };
 
 /// relu activation
@@ -51,8 +55,7 @@ export const sgd = (learningRate: number): Optimiser => {
   return (gradients) =>
     Object.values(gradients).forEach(({ tensor, grad }) => {
       if (tensor.requires_grad) {
-        console.log("learn", tensor.valueOf(), "->", grad.valueOf());
-        tensor.update(tensor.detach().add(tensor.grad.detach().mul(lr)));
+        tensor.update(tensor.detach().add(grad.detach().mul(lr)));
       }
       // @ts-ignore
       tensor.grad = null;
@@ -65,16 +68,21 @@ export const binaryCrossEntropy =
   (y, p) => {
     // TODO: using clamp fn seems to break auto-grad
     const pClamp = p.maximum(SM.scalar(eps)).minimum(SM.scalar(1 - eps));
-    return SM.add(
-      SM.mul(y, SM.log(pClamp)),
-      SM.mul(SM.scalar(1).sub(y), SM.log(SM.scalar(1).sub(pClamp)))
-    ).mul(SM.scalar(-1));
+    return SM.mul(
+      SM.scalar(-1),
+      SM.add(
+        SM.mul(y, SM.log(pClamp)),
+        SM.mul(SM.scalar(1).sub(y), SM.log(SM.scalar(1).sub(pClamp)))
+      )
+    );
   };
 
 /// train model
 export const train = (
   model: Layer,
-  data: Array<[y: SM.Tensor, x: SM.Tensor]>,
+  data: SM.Tensor,
+  xRange: string | number,
+  yRange: number,
   opts: {
     batchSize: number;
     epochs: number;
@@ -83,26 +91,24 @@ export const train = (
   }
 ): void => {
   for (let epoch = 0; epoch < opts.epochs; epoch++) {
-    data = SM.util.shuffle(data);
+    // TODO: shuffle
 
-    for (let i = 0; i < data.length; i += opts.batchSize) {
-      const batch = data.slice(i, i + opts.batchSize);
-      // TODO: fixme
-      if (batch.length < opts.batchSize) continue;
-      const X = SM.concat(
-        batch.map(([, x]) => x),
-        -2
-      );
-      const Y = SM.concat(
-        batch.map(([y]) => y),
-        -2
-      );
+    for (let i = 0; i < data.shape[0]; i += opts.batchSize) {
+      const end = Math.min(i + opts.batchSize, data.shape[0]);
+      const X = data.index([`${i}:${end}`, xRange]);
+      const Y = data.index([`${i}:${end}`, yRange]);
       const P = model(X, true);
-      const loss = opts.loss(Y, P);
-      console.log(loss.valueOf());
+      const loss = opts.loss(Y, P).mean();
       // @ts-ignore
       opts.optimiser(loss.backward());
     }
+
+    const X = data.index([":", xRange]);
+    const Y = data.index([":", yRange]);
+    const P = model(X);
+
+    const ml = opts.loss(Y, P).mean().valueOf();
+    console.log(`Epoch ${epoch + 1} training loss: ${ml}`);
 
     // TODO: metric reporter
     // TODO: validation set and early stopping

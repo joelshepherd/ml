@@ -2,7 +2,7 @@ import * as SM from "@shumai/shumai";
 import * as L from "../lib";
 
 const text = await Bun.file("data/cancer.csv").text();
-const data = text
+const rows = text
   .split("\n")
   .slice(1, -1)
   .map((line) =>
@@ -12,22 +12,22 @@ const data = text
       .map((cell, i) => (i === 9 ? (cell === "2" ? 0 : 1) : Number(cell)))
   )
   .filter((row) => !row.some(Number.isNaN))
-  .map<[SM.Tensor, SM.Tensor]>((row) => [
-    SM.scalar(row.pop()),
-    SM.tensor(Float32Array.from(row)),
-  ]);
+  .flat();
+
+const data = SM.tensor(Float32Array.from(rows)).reshape([rows.length / 10, 10]);
 
 const model = L.sequential(
-  L.linear(9, 20),
+  L.linear(9, 10),
   L.relu(),
-  L.dropOut(20, 0.5),
-  L.linear(20, 1),
+  L.linear(10, 10),
+  L.relu(),
+  L.linear(10, 1),
   L.sigmoid()
 );
 
-L.train(model, data, {
-  batchSize: 1,
-  epochs: 10,
+L.train(model, data, "0:9", 9, {
+  batchSize: 10,
+  epochs: 20,
   loss: L.binaryCrossEntropy(),
-  optimiser: L.sgd(1e3),
+  optimiser: L.sgd(1e-2),
 });
