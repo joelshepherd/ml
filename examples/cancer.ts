@@ -1,4 +1,3 @@
-import * as SM from "@shumai/shumai";
 import * as L from "../lib";
 
 const text = await Bun.file("data/cancer.csv").text();
@@ -11,10 +10,14 @@ const rows = text
       .slice(1)
       .map((cell, i) => (i === 9 ? (cell === "2" ? 0 : 1) : Number(cell)))
   )
-  .filter((row) => !row.some(Number.isNaN))
-  .flat();
+  .filter((row) => !row.some(Number.isNaN));
 
-const data = SM.tensor(Float32Array.from(rows)).reshape([rows.length / 10, 10]);
+const data = L.dataSet(L.tableToTensor(rows), {
+  xIndex: "0:9",
+  yIndex: 9,
+  batchSize: 10,
+  validationPortion: 0.25,
+});
 
 const model = L.sequential(
   L.linear(9, 10),
@@ -25,9 +28,13 @@ const model = L.sequential(
   L.sigmoid()
 );
 
-L.train(model, data, "0:9", 9, {
-  batchSize: 10,
-  epochs: 20,
+L.train(model, data, {
+  epochs: 10,
   loss: L.binaryCrossEntropy(),
-  optimiser: L.sgd(1e-2),
+  metrics: {
+    accuracy: L.accuracy(),
+    precision: L.precision(),
+    f1: L.f1(),
+  },
+  optimiser: L.sgd(1e-1),
 });
