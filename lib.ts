@@ -1,6 +1,7 @@
 import * as SM from "@shumai/shumai";
 
 type Layer = (input: SM.Tensor, train?: boolean) => SM.Tensor;
+type Initialiser = (dimensions: number[]) => SM.Tensor;
 type Loss = (y: SM.Tensor, p: SM.Tensor) => SM.Tensor;
 type Optimiser = (
   gradients: Record<string, { grad: SM.Tensor; tensor: SM.Tensor }>
@@ -16,11 +17,13 @@ export const sequential =
   (input, train = false) =>
     layers.reduce((input, layer) => layer(input, train), input);
 
-/// linear layer (no activation fn)
-export const linear = (inputSize: number, outputSize: number): Layer => {
-  // following torch's `U(-sqrt(k), sqrt(k))`
-  const k = Math.sqrt(1 / inputSize);
-  const W = uniform([inputSize, outputSize], k).requireGrad();
+/// linear layer
+export const linear = (
+  inputSize: number,
+  outputSize: number,
+  initialiser = he()
+): Layer => {
+  const W = initialiser([inputSize, outputSize]).requireGrad();
   // TODO: biases seems to adjust the number of inputs when optimising
   // const B = uniform([outputSize], k).requireGrad();
   return (input) => input.matmul(W); // .add(B);
@@ -38,7 +41,9 @@ export const sigmoid = (): Layer => SM.sigmoid;
 
 /// softmax activation
 export const softmax = (): Layer => (input) => {
-  const e = input.exp();
+  // for numerical stability, reduce inputs below 0
+  // see: https://cs231n.github.io/linear-classify/#softmax
+  const e = input.sub(input.amax([-1], true)).exp();
   return e.div(e.sum([-1], true));
 };
 
@@ -84,7 +89,6 @@ export const binaryCrossEntropy = (eps = 1e-6): Loss => {
 };
 
 /// cross-entropy loss
-// TODO: not currently numerically stable
 export const crossEntropy = (eps = 1e-6): Loss => {
   const low = SM.scalar(eps);
   const high = SM.scalar(1 - eps);
@@ -100,6 +104,7 @@ export const crossEntropy = (eps = 1e-6): Loss => {
 /// data set
 // TODO: data that cannot fit into memory?
 // TODO: shuffle - need better `.index()` options first?
+// TODO: or can i just shuffle regular arrays and create the tensor on the fly?
 export const dataSet = (
   data: SM.Tensor,
   opts: {
@@ -166,17 +171,19 @@ export const train = (
   }
 };
 
-// TODO: metrics for multiple classes
+/// accuracy metric
 export const accuracy = (): Metric => (y, p) =>
-  (y.elements -
+  (y.shape[0] -
     (y.shape[1]
-      ? y.argmax(1).sub(p.argmax(1))
+      ? y.argmax(-1, true).sub(p.argmax(-1, true)).sum([-1])
       : y.sub(p.greaterThan(SM.scalar(0.5)))
     )
       .countNonzero()
       .valueOf()) /
-  y.elements;
+  y.shape[0];
 
+/// precision metric
+// TODO: multi-class
 export const precision = (): Metric => (y, p) => {
   const m = [
     [0, 0],
@@ -191,6 +198,8 @@ export const precision = (): Metric => (y, p) => {
   return m[1][1] / (m[1][1] + m[0][1] || 1);
 };
 
+/// f1 metric
+// TODO: multi-class
 export const f1 = (): Metric => (y, p) => {
   const m = [
     [0, 0],
@@ -205,21 +214,33 @@ export const f1 = (): Metric => (y, p) => {
   return (2 * m[1][1]) / (2 * m[1][1] + m[0][1] + m[1][0]);
 };
 
+/// xavier initialiser
+/// use with tahn
+export const xavier =
+  (gain = 1): Initialiser =>
+  (dimensions) =>
+    uniform(dimensions, gain * Math.sqrt(6 / (dimensions[0] + dimensions[1])));
+
+/// he initialiser
+/// use with relu
+export const he = (): Initialiser => (dimensions) =>
+  SM.randn(dimensions).mul(SM.scalar(Math.sqrt(2 / dimensions[0])));
+
 /// create a uniform dist from -k to k
 export const uniform = (dimensions: number[], k: number): SM.Tensor =>
   SM.rand(dimensions)
     .sub(SM.scalar(0.5))
     .mul(SM.scalar(k * 2));
 
-// TODO: \" in quotes
+// TODO: escaping quotes
 export const csvLine = (line: string): string[] => {
   const cells = [];
   let cell = "";
-  let inQuotes = false;
+  let quoting = false;
   for (let letter of line) {
     if (letter === '"') {
-      inQuotes = !inQuotes;
-    } else if (!inQuotes && letter === ",") {
+      quoting = !quoting;
+    } else if (!quoting && letter === ",") {
       cells.push(cell);
       cell = "";
     } else {

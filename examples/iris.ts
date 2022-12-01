@@ -1,5 +1,4 @@
 import * as SM from "@shumai/shumai";
-import * as Lo from "lodash";
 import * as L from "../lib";
 
 // Data
@@ -32,21 +31,19 @@ const rows: Row[] = text
 const data = L.dataSet(L.tableToTensor(SM.util.shuffle(rows)), {
   xIndex: "0:4",
   yIndex: "4:7",
-  batchSize: 10,
+  batchSize: 16,
   validationPortion: 0.25,
 });
 
 const model = L.sequential(
   L.linear(4, 10),
   L.relu(),
-  L.linear(10, 10),
-  L.relu(),
   L.linear(10, 3),
   L.softmax()
 );
 
 L.train(model, data, {
-  epochs: 100,
+  epochs: 1000,
   loss: L.crossEntropy(),
   metrics: {
     accuracy: L.accuracy(),
@@ -56,14 +53,13 @@ L.train(model, data, {
   optimiser: L.sgd(1e-3),
 });
 
-// test
-const X = data[1][1];
-const Y = data[1][0];
-const P = model(X);
-
-Lo.take(
-  SM.util.shuffle(
-    Lo.zip(Lo.chunk(Y.toFloat32Array(), 3), Lo.chunk(P.toFloat32Array(), 3))
-  ),
-  10
-).forEach(([y, p]) => console.log(y, "v", p));
+// debugging
+// const X = data[1][1];
+// const Y = data[1][0];
+// const P = model(X);
+// Lo.take(
+//   SM.util.shuffle(
+//     Lo.zip(Lo.chunk(Y.toFloat32Array(), 3), Lo.chunk(P.toFloat32Array(), 3))
+//   ),
+//   10
+// ).forEach(([y, p]) => console.log(y, "v", p));
