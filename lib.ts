@@ -1,45 +1,55 @@
 import * as SM from "@shumai/shumai";
 
-type Layer = (input: SM.Tensor, train?: boolean) => SM.Tensor;
-type Initialiser = (dimensions: number[]) => SM.Tensor;
-type Loss = (y: SM.Tensor, p: SM.Tensor) => SM.Tensor;
-type Optimiser = (
-  gradients: Record<string, { grad: SM.Tensor; tensor: SM.Tensor }>
-) => void;
-type Metric = (y: SM.Tensor, p: SM.Tensor) => number;
-type DataSet = [train: () => Generator<Batch>, validation: Batch];
-type Batch = [y: SM.Tensor, x: SM.Tensor];
+// layers
 
-/// create a sequential model
-/// TODO: track previous layer size?
+/** model layer */
+type Layer = (input: SM.Tensor, train?: boolean) => SM.Tensor;
+
+/** combine layers sequentially into a model */
 export const sequential =
   (...layers: Layer[]): Layer =>
   (input, train = false) =>
     layers.reduce((input, layer) => layer(input, train), input);
 
-/// linear layer
+/** linear layer */
 export const linear = (
-  inputSize: number,
-  outputSize: number,
+  inSize: number,
+  outSize: number,
   initialiser = he()
 ): Layer => {
-  const W = initialiser([inputSize, outputSize]).requireGrad();
-  // TODO: biases seems to adjust the number of inputs when optimising
-  // const B = uniform([outputSize], k).requireGrad();
-  return (input) => input.matmul(W); // .add(B);
+  const W = initialiser([inSize, outSize]).requireGrad();
+  return (input) => input.matmul(W);
 };
 
-/// relu activation
+/** bias layer */
+export const bias = (size: number, initialiser = he()): Layer => {
+  // TODO: biases seems to adjust the number of inputs when optimising
+  const B = initialiser([size]).requireGrad();
+  return (input) => input.add(B);
+};
+
+/** drop-out regularisation layer */
+export const dropOut = (keepProb: number): Layer => {
+  const p = SM.scalar(keepProb);
+  return (input, train) =>
+    train ? input.mul(SM.rand(input.shape).lessThan(p)).div(p) : input;
+};
+
+// activation fns
+
+/** relu activation */
 export const relu = (): Layer => {
   const t = SM.scalar(0);
   return (input) => input.maximum(t);
 };
 
-/// sigmoid activation
-/// sm has native implementation
+/**
+ * sigmoid activation
+ * sm has a native implementation
+ */
 export const sigmoid = (): Layer => SM.sigmoid;
 
-/// softmax activation
+/** softmax activation */
 export const softmax = (): Layer => (input) => {
   // for numerical stability, reduce inputs below 0
   // see: https://cs231n.github.io/linear-classify/#softmax
@@ -47,27 +57,33 @@ export const softmax = (): Layer => (input) => {
   return e.div(e.sum([-1], true));
 };
 
-/// drop-out regularisation layer
-export const dropOut = (keepProb: number): Layer => {
-  const p = SM.scalar(keepProb);
-  return (input, train) =>
-    train ? input.mul(SM.rand(input.shape).lessThan(p)).div(p) : input;
-};
+// initialisers
 
-/// stochastic gradient descent optimiser
-export const sgd = (learningRate: number): Optimiser => {
-  const lr = SM.scalar(-learningRate);
-  return (gradients) =>
-    Object.values(gradients).forEach(({ tensor, grad }) => {
-      if (tensor.requires_grad) {
-        tensor.update(tensor.detach().add(grad.detach().mul(lr)));
-      }
-      // @ts-ignore
-      tensor.grad = null;
-    });
-};
+/** layer initialiser */
+type Initialiser = (dimensions: number[]) => SM.Tensor;
 
-/// binary cross-entropy loss
+/**
+ * xavier initialiser
+ * use with tahn
+ */
+export const xavier =
+  (gain = 1): Initialiser =>
+  (dimensions) =>
+    uniform(dimensions, gain * Math.sqrt(6 / (dimensions[0] + dimensions[1])));
+
+/**
+ * he initialiser
+ * use with relu
+ */
+export const he = (): Initialiser => (dimensions) =>
+  SM.randn(dimensions).mul(SM.scalar(Math.sqrt(2 / dimensions[0])));
+
+// loss fns
+
+/** loss fn */
+type Loss = (y: SM.Tensor, p: SM.Tensor) => SM.Tensor;
+
+/** binary cross-entropy loss */
 export const binaryCrossEntropy = (eps = 1e-6): Loss => {
   const low = SM.scalar(eps);
   const high = SM.scalar(1 - eps);
@@ -88,7 +104,7 @@ export const binaryCrossEntropy = (eps = 1e-6): Loss => {
   };
 };
 
-/// cross-entropy loss
+/** cross-entropy loss */
 export const crossEntropy = (eps = 1e-6): Loss => {
   const low = SM.scalar(eps);
   const high = SM.scalar(1 - eps);
@@ -101,10 +117,20 @@ export const crossEntropy = (eps = 1e-6): Loss => {
   };
 };
 
-/// data set
-// TODO: data that cannot fit into memory?
-// TODO: shuffle - need better `.index()` options first?
-// TODO: or can i just shuffle regular arrays and create the tensor on the fly?
+// datasets
+
+/** dataset */
+type DataSet = [train: () => Generator<Batch>, validation: Batch];
+
+/** data batch */
+type Batch = [y: SM.Tensor, x: SM.Tensor];
+
+/**
+ * data set
+ * TODO: data that cannot fit into memory?
+ * TODO: shuffle - need better `.index()` options first?
+ * TODO: or can i just shuffle regular arrays and create the tensor on the fly?
+ */
 export const dataSet = (
   data: SM.Tensor,
   opts: {
@@ -132,8 +158,13 @@ export const dataSet = (
   ];
 };
 
-/// train model
-// TODO: handle p reshaping
+// training
+
+/**
+ * train model
+ * TODO: handle p reshaping
+ * TODO: early stopping
+ */
 export const train = (
   model: Layer,
   [train, validation]: DataSet,
@@ -166,12 +197,35 @@ export const train = (
       console.log(`${name}:`.padEnd(10), metric(y, p))
     );
     console.log();
-
-    // TODO: early stopping
   }
 };
 
-/// accuracy metric
+// optimisers
+
+/** optimiser */
+type Optimiser = (
+  gradients: Record<string, { grad: SM.Tensor; tensor: SM.Tensor }>
+) => void;
+
+/** stochastic gradient descent optimiser */
+export const sgd = (learningRate: number): Optimiser => {
+  const lr = SM.scalar(-learningRate);
+  return (gradients) =>
+    Object.values(gradients).forEach(({ tensor, grad }) => {
+      if (tensor.requires_grad) {
+        tensor.update(tensor.detach().add(grad.detach().mul(lr)));
+      }
+      // @ts-ignore
+      tensor.grad = null;
+    });
+};
+
+// metrics
+
+/** metric */
+type Metric = (y: SM.Tensor, p: SM.Tensor) => number;
+
+/** accuracy metric */
 export const accuracy = (): Metric => (y, p) =>
   (y.shape[0] -
     (y.shape[1]
@@ -182,8 +236,10 @@ export const accuracy = (): Metric => (y, p) =>
       .valueOf()) /
   y.shape[0];
 
-/// precision metric
-// TODO: multi-class
+/**
+ * precision metric
+ * TODO: multi-class
+ */
 export const precision = (): Metric => (y, p) => {
   const m = [
     [0, 0],
@@ -198,8 +254,10 @@ export const precision = (): Metric => (y, p) => {
   return m[1][1] / (m[1][1] + m[0][1] || 1);
 };
 
-/// f1 metric
-// TODO: multi-class
+/**
+ * f1 metric
+ * TODO: multi-class
+ */
 export const f1 = (): Metric => (y, p) => {
   const m = [
     [0, 0],
@@ -214,19 +272,9 @@ export const f1 = (): Metric => (y, p) => {
   return (2 * m[1][1]) / (2 * m[1][1] + m[0][1] + m[1][0]);
 };
 
-/// xavier initialiser
-/// use with tahn
-export const xavier =
-  (gain = 1): Initialiser =>
-  (dimensions) =>
-    uniform(dimensions, gain * Math.sqrt(6 / (dimensions[0] + dimensions[1])));
+// utils
 
-/// he initialiser
-/// use with relu
-export const he = (): Initialiser => (dimensions) =>
-  SM.randn(dimensions).mul(SM.scalar(Math.sqrt(2 / dimensions[0])));
-
-/// create a uniform dist from -k to k
+/** create a uniform dist from -k to k */
 export const uniform = (dimensions: number[], k: number): SM.Tensor =>
   SM.rand(dimensions)
     .sub(SM.scalar(0.5))
@@ -251,6 +299,7 @@ export const csvLine = (line: string): string[] => {
   return cells;
 };
 
+// TODO: move into dataset fn
 export const tableToTensor = (rows: number[][]) =>
   SM.tensor(Float32Array.from(rows.flat())).reshape([
     rows.length,
