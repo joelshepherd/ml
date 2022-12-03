@@ -1,39 +1,30 @@
-import * as SM from "@shumai/shumai";
 import * as L from "../lib";
 
 // Data
-type Raw = [
+type Row = [
   string,
   string,
   string,
   string,
   "Setosa" | "Versicolor" | "Virginica"
 ];
-type Row = [number, number, number, number, 0 | 1, 0 | 1, 0 | 1];
 
 const text = await Bun.file("./data/iris.csv").text();
-const rows: Row[] = text
+const rows = text
   .split("\n")
   .slice(1, -1)
   .map((line) => {
-    const raw = L.csvLine(line) as Raw;
-    return [
-      Number(raw[0]),
-      Number(raw[1]),
-      Number(raw[2]),
-      Number(raw[3]),
-      raw[4] === "Setosa" ? 1 : 0,
-      raw[4] === "Versicolor" ? 1 : 0,
-      raw[4] === "Virginica" ? 1 : 0,
-    ];
+    const row = L.csvLine(line) as Row;
+    return L.example(row.slice(0, 4).map(Number), [
+      row[4] === "Setosa" ? 1 : 0,
+      row[4] === "Versicolor" ? 1 : 0,
+      row[4] === "Virginica" ? 1 : 0,
+    ]);
   });
 
-const data = L.dataSet(L.tableToTensor(SM.util.shuffle(rows)), {
-  xIndex: "0:4",
-  yIndex: "4:7",
-  batchSize: 16,
-  validationPortion: 0.25,
-});
+const [trainRows, validationRows] = L.split(rows, 0.8);
+const train = L.dataSet(trainRows, { batchSize: 5 });
+const validation = L.dataSet(validationRows, { batchSize: Infinity });
 
 const model = L.sequential(
   L.linear(4, 10),
@@ -42,24 +33,12 @@ const model = L.sequential(
   L.softmax()
 );
 
-L.train(model, data, {
-  epochs: 1000,
+L.train(model, train, validation, {
+  epochs: 400,
   loss: L.crossEntropy(),
   metrics: {
     accuracy: L.accuracy(),
-    // precision: L.precision(),
-    // f1: L.f1(),
+    confusion: L.confusion(),
   },
   optimiser: L.sgd(1e-3),
 });
-
-// debugging
-// const X = data[1][1];
-// const Y = data[1][0];
-// const P = model(X);
-// Lo.take(
-//   SM.util.shuffle(
-//     Lo.zip(Lo.chunk(Y.toFloat32Array(), 3), Lo.chunk(P.toFloat32Array(), 3))
-//   ),
-//   10
-// ).forEach(([y, p]) => console.log(y, "v", p));

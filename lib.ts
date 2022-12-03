@@ -96,11 +96,13 @@ export const binaryCrossEntropy = (eps = 1e-6): Loss => {
     p = p.maximum(low).minimum(high);
     return SM.mul(
       SM.scalar(-1),
-      SM.add(
-        SM.mul(y, SM.log(p)),
-        SM.mul(SM.scalar(1).sub(y), SM.log(SM.scalar(1).sub(p)))
+      SM.mean(
+        SM.add(
+          SM.mul(y, SM.log(p)),
+          SM.mul(SM.scalar(1).sub(y), SM.log(SM.scalar(1).sub(p)))
+        )
       )
-    ).mean();
+    );
   };
 };
 
@@ -112,18 +114,21 @@ export const crossEntropy = (eps = 1e-6): Loss => {
     p = p.maximum(low).minimum(high);
     return SM.mul(
       SM.scalar(-1),
-      SM.sum(SM.mul(y, SM.log(p)), [-1], true)
-    ).mean();
+      SM.mean(SM.sum(SM.mul(y, SM.log(p)), [-1], true))
+    );
   };
 };
 
 // datasets
 
 /** dataset */
-type DataSet = [train: () => Generator<Batch>, validation: Batch];
+type DataSet = () => Generator<Batch>;
+
+/** example */
+type Example = [x: number[], y: number[]];
 
 /** data batch */
-type Batch = [y: SM.Tensor, x: SM.Tensor];
+type Batch = [x: SM.Tensor, y: SM.Tensor];
 
 /**
  * data set
@@ -132,42 +137,36 @@ type Batch = [y: SM.Tensor, x: SM.Tensor];
  * TODO: or can i just shuffle regular arrays and create the tensor on the fly?
  */
 export const dataSet = (
-  data: SM.Tensor,
-  opts: {
-    xIndex: number | string;
-    yIndex: number | string;
-    batchSize: number;
-    validationPortion: number;
-  }
+  data: Example[],
+  opts: { batchSize: number }
 ): DataSet => {
-  const [len] = data.shape;
-  const split = Math.floor(len * (1 - opts.validationPortion));
-  const batch = (rowIndex: string): Batch => [
-    data.index([rowIndex, opts.yIndex]),
-    data.index([rowIndex, opts.xIndex]),
-  ];
-  return [
-    function* () {
-      // TODO: batching validation when metrics are ready
-      // const min = train ? 0 : split;
-      // const max = train ? split : len;
-      for (let i = 0; i < split; i += opts.batchSize)
-        yield batch(i + ":" + Math.min(i + opts.batchSize, split));
-    },
-    batch(split + ":" + len),
-  ];
+  return function* () {
+    const shuffled = SM.util.shuffle(data);
+    for (let i = 0; i < shuffled.length; i += opts.batchSize) {
+      const x = tableToTensor(
+        shuffled.slice(i, i + opts.batchSize).map((row) => row[0])
+      );
+      const y = tableToTensor(
+        shuffled.slice(i, i + opts.batchSize).map((row) => row[1])
+      );
+      yield [x, y];
+    }
+  };
 };
+
+/** example */
+export const example = (x: number[], y: number[]): Example => [x, y];
 
 // training
 
 /**
  * train model
- * TODO: handle p reshaping
  * TODO: early stopping
  */
 export const train = (
   model: Layer,
-  [train, validation]: DataSet,
+  train: DataSet,
+  validation: DataSet,
   opts: {
     epochs: number;
     loss: Loss;
@@ -183,16 +182,17 @@ export const train = (
   for (let epoch = 0; epoch < opts.epochs; epoch++) {
     console.log(bold(`Epoch ${epoch + 1}/${opts.epochs}`));
 
-    for (const [y, x] of train()) {
-      const p = model(x, true).reshape(y.shape);
+    for (const [x, y] of train()) {
+      const p = model(x, true);
       const loss = opts.loss(y, p);
       // @ts-ignore not over network, will not be a promise
       opts.optimiser(loss.backward());
     }
 
     // metrics
-    const [y, x] = validation;
-    const p = model(x).reshape(y.shape);
+    // TODO: batch validation and metrics
+    const [x, y] = validation().next().value;
+    const p = model(x);
     Object.entries(metrics).forEach(([name, metric]) =>
       console.log(`${name}:`.padEnd(10), metric(y, p))
     );
@@ -223,18 +223,29 @@ export const sgd = (learningRate: number): Optimiser => {
 // metrics
 
 /** metric */
-type Metric = (y: SM.Tensor, p: SM.Tensor) => number;
+type Metric = (y: SM.Tensor, p: SM.Tensor) => unknown;
 
 /** accuracy metric */
 export const accuracy = (): Metric => (y, p) =>
-  (y.shape[0] -
-    (y.shape[1]
-      ? y.argmax(-1, true).sub(p.argmax(-1, true)).sum([-1])
-      : y.sub(p.greaterThan(SM.scalar(0.5)))
-    )
-      .countNonzero()
-      .valueOf()) /
-  y.shape[0];
+  (y.shape[1] > 1
+    ? // binary
+      y.sub(p.greaterThan(SM.scalar(0.5)))
+    : // multi-class
+      y.argmax(-1, true).sub(p.argmax(-1, true)).sum([-1])
+  )
+    .eq(SM.scalar(0))
+    .mean()
+    .valueOf();
+
+/** confusion matrix metric */
+export const confusion = (): Metric => (y, p) => {
+  // TODO: binary case - `where(gt(0.5), [0,1], [1,0])`?
+  // TODO: fix case for 2 max classes, argmax + onehot would work, if we had onehot!
+  // convert probabilities to just top prediction
+  const t = SM.eq(p, SM.amax(p, [-1], true)).astype(SM.dtype.Float32);
+  const c = SM.matmul(y.T(), t);
+  return tensorToTable(c);
+};
 
 /**
  * precision metric
@@ -247,12 +258,14 @@ export const precision = (): Metric => (y, p) => {
   ];
   const len = y.shape[0];
   for (let i = 0; i < len; i++) {
-    const i1 = y.index([i]).valueOf();
-    const i2 = p.index([i]).valueOf() > 0.5 ? 1 : 0;
+    const i1 = y.index([i, 0]).valueOf();
+    const i2 = p.index([i, 0]).valueOf() > 0.5 ? 1 : 0;
     m[i1][i2] += 1;
   }
   return m[1][1] / (m[1][1] + m[0][1] || 1);
 };
+
+// TODO: recall
 
 /**
  * f1 metric
@@ -265,8 +278,8 @@ export const f1 = (): Metric => (y, p) => {
   ];
   const len = y.shape[0];
   for (let i = 0; i < len; i++) {
-    const i1 = y.index([i]).valueOf();
-    const i2 = p.index([i]).valueOf() > 0.5 ? 1 : 0;
+    const i1 = y.index([i, 0]).valueOf();
+    const i2 = p.index([i, 0]).valueOf() > 0.5 ? 1 : 0;
     m[i1][i2] += 1;
   }
   return (2 * m[1][1]) / (2 * m[1][1] + m[0][1] + m[1][0]);
@@ -305,5 +318,21 @@ export const tableToTensor = (rows: number[][]) =>
     rows.length,
     rows[0].length,
   ]);
+
+export const tensorToTable = (tensor: SM.Tensor): number[][] => {
+  const a = tensor.toFloat32Array();
+  return Array.from(SM.util.range(tensor.shape[0])).map((x) =>
+    Array.from(SM.util.range(tensor.shape[1])).map((y) =>
+      a.at(x * tensor.shape[0] + y)
+    )
+  );
+};
+
+// TODO: improve data pipeline
+export const split = <T>(rows: T[], portion: number): [T[], T[]] => {
+  const shuffled = SM.util.shuffle(rows);
+  const index = Math.round(shuffled.length * portion);
+  return [shuffled.slice(0, index), shuffled.slice(index)];
+};
 
 const bold = (text: string): string => `\033[1m${text}\033[0m`;

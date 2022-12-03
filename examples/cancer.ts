@@ -10,14 +10,13 @@ const rows = text
       .slice(1)
       .map((cell, i) => (i === 9 ? (cell === "2" ? 0 : 1) : Number(cell)))
   )
-  .filter((row) => !row.some(Number.isNaN));
+  .filter((row) => !row.some(Number.isNaN))
+  .map((row) => L.example(row.slice(0, 9), row.slice(9)));
 
-const data = L.dataSet(L.tableToTensor(rows), {
-  xIndex: "0:9",
-  yIndex: 9,
-  batchSize: 10,
-  validationPortion: 0.25,
-});
+const [trainRows, validationRows] = L.split(rows, 0.75);
+
+const data = L.dataSet(trainRows, { batchSize: 10 });
+const validation = L.dataSet(validationRows, { batchSize: Infinity });
 
 const model = L.sequential(
   L.linear(9, 10),
@@ -28,7 +27,7 @@ const model = L.sequential(
   L.sigmoid()
 );
 
-L.train(model, data, {
+L.train(model, data, validation, {
   epochs: 10,
   loss: L.binaryCrossEntropy(),
   metrics: {
@@ -36,5 +35,5 @@ L.train(model, data, {
     precision: L.precision(),
     f1: L.f1(),
   },
-  optimiser: L.sgd(1e-1),
+  optimiser: L.sgd(1e-2),
 });
