@@ -34,7 +34,7 @@ const model = L.sequential(
 );
 
 L.train(model, train, validation, {
-  epochs: 400,
+  epochs: 100,
   loss: L.crossEntropy(),
   metrics: {
     accuracy: L.accuracy(),

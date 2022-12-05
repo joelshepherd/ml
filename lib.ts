@@ -88,10 +88,7 @@ export const binaryCrossEntropy = (eps = 1e-6): Loss => {
   const low = SM.scalar(eps);
   const high = SM.scalar(1 - eps);
   return (y, p) => {
-    // TODO: y seems to come in dim [n], while p comes in dim [n,1]
-    //       this seems to expand the output to [n,n] if i do not reshape
-    //       -> i've moved this the train fn for now
-    // TODO: clamp seems to break auto-grad
+    // TODO: clamp seems to break auto-grad, using min+max for now
     // p = SM.clamp(p, eps, 1 - eps);
     p = p.maximum(low).minimum(high);
     return SM.mul(
@@ -119,6 +116,16 @@ export const crossEntropy = (eps = 1e-6): Loss => {
   };
 };
 
+/** mean absolute error loss */
+export const meanAbsoluteError = (): Loss => (y, p) =>
+  SM.mean(SM.abs(SM.sub(y, p)));
+
+/** mean squared error loss */
+export const meanSquaredError = (): Loss => (y, p) => {
+  const diff = SM.sub(y, p);
+  return SM.mean(SM.mul(diff, diff));
+};
+
 // datasets
 
 /** dataset */
@@ -133,8 +140,6 @@ type Batch = [x: SM.Tensor, y: SM.Tensor];
 /**
  * data set
  * TODO: data that cannot fit into memory?
- * TODO: shuffle - need better `.index()` options first?
- * TODO: or can i just shuffle regular arrays and create the tensor on the fly?
  */
 export const dataSet = (
   data: Example[],
