@@ -84,37 +84,20 @@ export const he = (): Initialiser => (dimensions) =>
 type Loss = (y: SM.Tensor, p: SM.Tensor) => SM.Tensor;
 
 /** binary cross-entropy loss */
-export const binaryCrossEntropy = (eps = 1e-6): Loss => {
-  const low = SM.scalar(eps);
-  const high = SM.scalar(1 - eps);
-  return (y, p) => {
-    // TODO: clamp seems to break auto-grad, using min+max for now
-    // p = SM.clamp(p, eps, 1 - eps);
-    p = p.maximum(low).minimum(high);
-    return SM.mul(
-      SM.scalar(-1),
-      SM.mean(
-        SM.add(
-          SM.mul(y, SM.log(p)),
-          SM.mul(SM.scalar(1).sub(y), SM.log(SM.scalar(1).sub(p)))
-        )
+export const binaryCrossEntropy = (): Loss => (y, p) =>
+  SM.mul(
+    SM.scalar(-1),
+    SM.mean(
+      SM.add(
+        SM.mul(y, clippedLog(p)),
+        SM.mul(SM.scalar(1).sub(y), clippedLog(SM.scalar(1).sub(p)))
       )
-    );
-  };
-};
+    )
+  );
 
 /** cross-entropy loss */
-export const crossEntropy = (eps = 1e-6): Loss => {
-  const low = SM.scalar(eps);
-  const high = SM.scalar(1 - eps);
-  return (y, p) => {
-    p = p.maximum(low).minimum(high);
-    return SM.mul(
-      SM.scalar(-1),
-      SM.mean(SM.sum(SM.mul(y, SM.log(p)), [-1], true))
-    );
-  };
-};
+export const crossEntropy = (): Loss => (y, p) =>
+  SM.mul(SM.scalar(-1), SM.mean(SM.sum(SM.mul(y, clippedLog(p)), [1])));
 
 /** mean absolute error loss */
 export const meanAbsoluteError = (): Loss => (y, p) =>
@@ -297,6 +280,9 @@ export const uniform = (dimensions: number[], k: number): SM.Tensor =>
   SM.rand(dimensions)
     .sub(SM.scalar(0.5))
     .mul(SM.scalar(k * 2));
+
+const clippedLog = (tensor: SM.Tensor): SM.Tensor =>
+  SM.maximum(SM.log(tensor), SM.scalar(-100));
 
 // TODO: escaping quotes
 export const csvLine = (line: string): string[] => {
