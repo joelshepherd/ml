@@ -1,0 +1,10 @@
+ml
+
+this is an experimental ml library built atop facebookresearch/shumai, mostly
+as an academic exercise. refer to the examples directory for how to use it.
+most novel work has been upstreamed.
+
+install
+
+1. install arrayfire
+2. install bun
