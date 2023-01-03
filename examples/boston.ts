@@ -1,27 +1,26 @@
-import * as L from "../lib";
+import { Data, Model, Train } from "../lib.js";
 
-const text = await Bun.file("data/boston.csv").text();
-const rows = text
-  .split("\n")
-  .slice(1, -1)
-  .map((line) => L.csvLine(line).map(Number))
-  .map((row) => L.example(row.slice(0, 13), row.slice(13)));
-
-const [trainRows, validationRows] = L.split(rows, 0.75);
-const data = L.dataSet(trainRows, { batchSize: 10 });
-const validation = L.dataSet(validationRows, { batchSize: Infinity });
-
-const model = L.sequential(
-  L.linear(13, 20),
-  L.relu(),
-  L.linear(20, 20),
-  L.relu(),
-  L.linear(20, 1)
+const [train, valid] = Data.pipeline(
+  Data.fromCsv("data/boston.csv"),
+  Data.mapExample(
+    (row) => row.slice(0, 13).map(Number),
+    (row) => row.slice(13).map(Number)
+  ),
+  Data.shuffle(),
+  Data.batch(10),
+  Data.split(0.8)
 );
 
-L.train(model, data, validation, {
-  epochs: 20,
-  loss: L.meanAbsoluteError(),
-  metrics: {},
-  optimiser: L.sgd(1e-5),
+const model = Model.sequential(
+  Model.linear(13, 20),
+  Model.relu(),
+  Model.linear(20, 20),
+  Model.relu(),
+  Model.linear(20, 1)
+);
+
+Train.fit(model, train, valid, {
+  epochs: 100,
+  loss: Train.meanAbsoluteError(),
+  optimiser: Train.sgd(1e-5),
 });

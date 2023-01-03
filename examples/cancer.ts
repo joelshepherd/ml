@@ -1,39 +1,31 @@
-import * as L from "../lib";
+import { Data, Model, Train } from "../lib.js";
 
-const text = await Bun.file("data/cancer.csv").text();
-const rows = text
-  .split("\n")
-  .slice(1, -1)
-  .map((line) =>
-    line
-      .split(",")
-      .slice(1)
-      .map((cell, i) => (i === 9 ? (cell === "2" ? 0 : 1) : Number(cell)))
-  )
-  .filter((row) => !row.some(Number.isNaN))
-  .map((row) => L.example(row.slice(0, 9), row.slice(9)));
-
-const [trainRows, validationRows] = L.split(rows, 0.75);
-
-const data = L.dataSet(trainRows, { batchSize: 10 });
-const validation = L.dataSet(validationRows, { batchSize: Infinity });
-
-const model = L.sequential(
-  L.linear(9, 10),
-  L.relu(),
-  L.linear(10, 10),
-  L.relu(),
-  L.linear(10, 1),
-  L.sigmoid()
+const [train, valid] = Data.pipeline(
+  Data.fromCsv("data/cancer.csv"),
+  Data.map((row) => row.map(Number)),
+  // remove rows with missing data
+  Data.filter((row) => !row.some(Number.isNaN)),
+  Data.mapExample(
+    (row) => row.slice(1, 10),
+    (row) => [row[10] === 2 ? 0 : 1]
+  ),
+  Data.shuffle(),
+  Data.batch(10),
+  Data.split(0.8)
 );
 
-L.train(model, data, validation, {
-  epochs: 10,
-  loss: L.binaryCrossEntropy(),
-  metrics: {
-    accuracy: L.accuracy(),
-    precision: L.precision(),
-    f1: L.f1(),
-  },
-  optimiser: L.sgd(1e-2),
+const model = Model.sequential(
+  Model.linear(9, 10),
+  Model.relu(),
+  Model.linear(10, 10),
+  Model.relu(),
+  Model.linear(10, 1),
+  Model.sigmoid()
+);
+
+Train.fit(model, train, valid, {
+  epochs: 100,
+  loss: Train.binaryCrossEntropy(),
+  metrics: [Train.accuracy], // TODO: precision, recall, f1, confusion
+  optimiser: Train.sgd(1e-3),
 });
