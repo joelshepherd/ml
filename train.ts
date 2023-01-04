@@ -23,6 +23,18 @@ export const binaryCrossEntropy = (): Loss => (y, p) =>
     )
   );
 
+/**
+ * binary cross-entrioy loss from logits
+ * improved numerical stability vs. sigmoid & bce separately
+ */
+export const binaryCrossEntropyFromLogits = (): Loss => (y, p) =>
+  SM.mean(
+    SM.add(
+      SM.sub(SM.maximum(p, SM.scalar(0)), SM.mul(p, y)),
+      SM.log1p(SM.exp(SM.negate(SM.abs(p))))
+    )
+  );
+
 /** cross-entropy loss */
 // TODO: if batch size is 1, throws
 export const crossEntropy = (): Loss => (y, p) =>
@@ -59,43 +71,44 @@ export const fit = (
   opts.epochs ??= 1;
   opts.metrics ??= [];
 
-  // add loss to metrics
-  const metrics = [batchMetric("loss", opts.loss, SM.mean), ...opts.metrics];
+  // metrics
+  const lossMetric = batchMetric("loss", opts.loss, SM.mean);
+  const restMetrics = opts.metrics;
+  const metrics = [lossMetric, ...restMetrics];
 
+  // training loop
   for (let epoch = 1; epoch <= opts.epochs; epoch++) {
     console.log(bold(`epoch ${epoch}/${opts.epochs}`));
 
     // training
     for (const [feature, label] of train()) {
       const prediction = model(feature, true);
-      const loss = opts.loss(label, prediction);
+      const loss = lossMetric.add(label, prediction);
+      collectBatchMetrics(restMetrics, label, prediction);
       // @ts-ignore not over network, will not be a promise
       opts.optimiser(loss.backward());
     }
+    printBatchMetrics("training", metrics);
 
-    // training metrics
-    // TODO: this is slower than integrating with the training loop
-    console.log(underline("training"));
-    printBatchMetrics(model, train, metrics);
-
-    // validation metrics
-    console.log(underline("validation"));
-    printBatchMetrics(model, validation, metrics);
+    // validation
+    for (const [feature, label] of validation())
+      collectBatchMetrics(metrics, label, model(feature));
+    printBatchMetrics("validation", metrics);
 
     console.log();
   }
 };
 
-/** print batch metrics over dataset */
-const printBatchMetrics = (
-  model: Model.Layer,
-  data: Data.Dataset<Example>,
-  metrics: BatchMetric[]
-): void => {
-  for (const [feature, label] of data()) {
-    const prediction = model(feature);
-    metrics.forEach((metric) => metric.add(label, prediction));
-  }
+// FIXME: side-effects
+const collectBatchMetrics = (
+  metrics: BatchMetric[],
+  label: SM.Tensor,
+  prediction: SM.Tensor
+): void => metrics.forEach((metric) => metric.add(label, prediction));
+
+// FIXME: side-effects
+const printBatchMetrics = (phase: string, metrics: BatchMetric[]): void => {
+  console.log(underline(phase));
   metrics.forEach((metric) => {
     const output = metric.reduce();
     console.log(`${metric.name}:`, output ? printTensor(output) : null);
@@ -125,7 +138,7 @@ export const sgd = (learningRate: number): Optimiser => {
 // fit metrics
 
 /** batch metric for training */
-// TOD0: FitMetric?
+// TODO: FitMetric?
 // TODO: potentially add a print function?
 type BatchMetric = {
   name: string;
